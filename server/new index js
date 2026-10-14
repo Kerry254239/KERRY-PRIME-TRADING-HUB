@@ -1,0 +1,182 @@
+require("dotenv").config();
+
+const express = require("express");
+const cors = require("cors");
+const WebSocket = require("ws");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+const PORT = 5000;
+const APP_ID = 1089;
+
+let currentMarket = "R_100";
+let socket = null;
+
+// Only keep the latest 50 ticks
+const MAX_TICKS = 50;
+
+let digits = [];
+
+let signal = {
+    status: "COLLECTING 50 TICKS",
+    prediction: "WAIT",
+    confidence: 0,
+    trend: "STABLE",
+    stability: "LOW",
+    ticks: 0
+};
+
+let previousConfidence = 0;
+
+let entry = {
+    status: "WAITING FOR SIGNAL",
+    prediction: "WAIT",
+    candidates: [],
+    entryDigit: null,
+    waitingConfirmation: false,
+    confirmationTicks: [],
+    confirmations: 0,
+    patterns: []
+};
+
+// =========================
+// RESET ENTRY
+// =========================
+
+function resetEntry() {
+
+    entry.status = "WAITING FOR SIGNAL";
+    entry.prediction = signal.prediction;
+
+    entry.candidates = [];
+    entry.entryDigit = null;
+
+    entry.waitingConfirmation = false;
+    entry.confirmationTicks = [];
+
+    entry.confirmations = 0;
+    entry.patterns = [];
+}
+
+// =========================
+// RESET ALL
+// =========================
+
+function resetAll() {
+
+    digits = [];
+
+    signal = {
+        status: "COLLECTING 50 TICKS",
+        prediction: "WAIT",
+        confidence: 0,
+        trend: "STABLE",
+        stability: "LOW",
+        ticks: 0
+    };
+
+    previousConfidence = 0;
+
+    resetEntry();
+}
+
+// =========================
+// DIGIT STATISTICS
+// =========================
+
+function calculateDigitStats() {
+
+    let stats = {};
+
+    for (let i = 0; i <= 9; i++) {
+        stats[i] = 0;
+    }
+
+    digits.forEach(d => {
+        stats[d]++;
+    });
+
+    for (let i = 0; i <= 9; i++) {
+
+        stats[i] = Number(
+            ((stats[i] / digits.length) * 100).toFixed(2)
+        );
+
+    }
+
+    return stats;
+}
+
+// =========================
+// SIGNAL ENGINE
+// =========================
+
+function analyzeSignal() {
+
+    if (digits.length < MAX_TICKS)
+        return;
+
+    const previousPrediction = signal.prediction;
+
+    const stats = calculateDigitStats();
+
+    const low =
+        stats[0] +
+        stats[1] +
+        stats[2];
+
+    const high =
+        stats[7] +
+        stats[8] +
+        stats[9];
+
+    signal.status = "SIGNAL NOT READY";
+    signal.prediction = "WAIT";
+    signal.confidence = 0;
+
+    if (low <= 30 && (100 - low) >= 70) {
+
+        signal.status = "SIGNAL CONFIRMED";
+        signal.prediction = "OVER 2";
+        signal.confidence = Number((100 - low).toFixed(2));
+
+    }
+
+    else if (high <= 30 && (100 - high) >= 70) {
+
+        signal.status = "SIGNAL CONFIRMED";
+        signal.prediction = "UNDER 7";
+        signal.confidence = Number((100 - high).toFixed(2));
+
+    }
+
+    if (signal.confidence > previousConfidence)
+        signal.trend = "GAINING";
+
+    else if (signal.confidence < previousConfidence)
+        signal.trend = "LOSING";
+
+    else
+        signal.trend = "STABLE";
+
+    previousConfidence = signal.confidence;
+
+    if (signal.confidence >= 90)
+        signal.stability = "VERY HIGH";
+    else if (signal.confidence >= 80)
+        signal.stability = "HIGH";
+    else if (signal.confidence >= 70)
+        signal.stability = "MEDIUM";
+    else
+        signal.stability = "LOW";
+
+    if (previousPrediction !== signal.prediction) {
+
+        resetEntry();
+
+    }
+
+}

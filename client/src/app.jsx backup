@@ -1,0 +1,601 @@
+import { useEffect, useState } from "react";
+import Login from "./Login";
+import "./App.css";
+
+
+function App(){
+
+
+const [loggedIn,setLoggedIn]=useState(
+localStorage.getItem("token") ? true:false
+);
+
+
+const [running,setRunning]=useState(false);
+
+
+const [market,setMarket]=useState("R_100");
+
+
+const [entry,setEntry]=useState(null);
+
+
+const [best,setBest]=useState([]);
+
+
+const [analysis,setAnalysis]=useState(null);
+
+
+
+
+
+const markets={
+
+
+R_10:"Volatility 10 Index",
+
+R_25:"Volatility 25 Index",
+
+R_50:"Volatility 50 Index",
+
+R_75:"Volatility 75 Index",
+
+R_100:"Volatility 100 Index",
+
+
+"1HZ10V":"Volatility 10 (1s)",
+
+"1HZ25V":"Volatility 25 (1s)",
+
+"1HZ50V":"Volatility 50 (1s)",
+
+"1HZ75V":"Volatility 75 (1s)",
+
+"1HZ100V":"Volatility 100 (1s)"
+
+
+};
+
+
+
+
+
+
+
+useEffect(()=>{
+
+
+if(!loggedIn || !running){
+
+return;
+
+}
+
+
+
+
+
+async function loadData(){
+
+
+try{
+
+
+const entryResponse =
+await fetch(
+
+`http://127.0.0.1:5000/entry/${market}`
+
+);
+
+
+
+const entryData =
+await entryResponse.json();
+
+
+setEntry(entryData.scanner);
+
+
+
+
+
+
+const bestResponse =
+await fetch(
+
+"http://127.0.0.1:5000/best-market"
+
+);
+
+
+
+const bestData =
+await bestResponse.json();
+
+
+
+setBest(bestData);
+
+
+
+
+
+
+const analysisResponse =
+await fetch(
+
+`http://127.0.0.1:5000/analysis/${market}`
+
+);
+
+
+
+const analysisData =
+await analysisResponse.json();
+
+
+
+setAnalysis(analysisData);
+
+
+
+}
+
+catch(error){
+
+console.log(error);
+
+}
+
+
+
+}
+
+
+
+
+
+loadData();
+
+
+
+const timer=setInterval(
+
+loadData,
+
+3000
+
+);
+
+
+
+return ()=>clearInterval(timer);
+
+
+
+},[running,market,loggedIn]);
+
+
+
+
+
+
+
+
+
+if(!loggedIn){
+
+
+return (
+
+<Login setLoggedIn={setLoggedIn}/>
+
+);
+
+
+}
+
+
+
+
+
+
+
+
+
+return(
+
+
+<div className="dashboard">
+
+
+
+<h1>
+KERRY PRIME TRADING HUB
+</h1>
+
+
+<h2>
+AI DIGIT ANALYZER
+</h2>
+
+
+
+
+
+
+
+<div className="controlPanel">
+
+
+<h2>
+ANALYZER CONTROL
+</h2>
+
+
+<button
+
+onClick={()=>setRunning(true)}
+
+>
+
+START ANALYSIS
+
+</button>
+
+
+
+
+<button
+
+onClick={()=>setRunning(false)}
+
+>
+
+STOP ANALYSIS
+
+</button>
+
+
+
+<h3>
+
+STATUS:
+
+{running ? " RUNNING":" STOPPED"}
+
+</h3>
+
+
+</div>
+
+
+
+
+
+
+
+
+<div className="marketPanel">
+
+
+<h2>
+CURRENT MARKET
+</h2>
+
+
+<h1>
+{markets[market]}
+</h1>
+
+
+<p>
+Symbol: {market}
+</p>
+
+
+<select
+
+value={market}
+
+onChange={(e)=>setMarket(e.target.value)}
+
+>
+
+
+{
+
+Object.entries(markets).map(([key,value])=>(
+
+
+<option
+
+key={key}
+
+value={key}
+
+>
+
+{value}
+
+</option>
+
+
+))
+
+
+}
+
+
+</select>
+
+
+</div>
+
+
+
+
+
+
+
+
+
+<div className="bestPanel">
+
+
+<h2>
+BEST MARKET
+</h2>
+
+
+
+{
+
+best.length > 0 ? (
+
+
+<>
+
+<h3>
+{best[0].market}
+</h3>
+
+
+<p>
+Prediction:
+
+{best[0].prediction}
+
+</p>
+
+
+<p>
+Strength:
+
+{best[0].strength}%
+
+</p>
+
+
+</>
+
+
+)
+
+:
+
+<p>
+Collecting data...
+</p>
+
+
+}
+
+
+</div>
+
+
+
+
+
+
+
+
+
+<div className="signalPanel">
+
+
+<h2>
+SIGNAL
+</h2>
+
+
+
+<h1>
+
+{
+
+entry?.status || "WAITING"
+
+}
+
+</h1>
+
+
+
+
+<p>
+Prediction
+</p>
+
+
+<h2>
+
+{entry?.prediction}
+
+</h2>
+
+
+
+
+
+<p>
+Entry Digit
+</p>
+
+
+<h1>
+
+{entry?.entryDigit ?? "-"}
+
+</h1>
+
+
+
+
+
+<p>
+Confirmation
+</p>
+
+
+<h2>
+
+{entry?.confirmations || 0}/5
+
+</h2>
+
+
+
+</div>
+
+
+
+
+
+
+
+
+
+<div className="patternPanel">
+
+
+<h2>
+ENTRY PATTERN
+</h2>
+
+
+
+{
+
+entry?.patterns?.length ?
+
+
+entry.patterns.map((item,index)=>(
+
+
+<p key={index}>
+
+Pattern {index+1}:
+
+&nbsp;
+
+{item.join(" → ")}
+
+</p>
+
+
+))
+
+
+:
+
+<p>
+Waiting for pattern...
+</p>
+
+
+}
+
+
+
+</div>
+
+
+
+
+
+
+
+
+
+<div className="analysisPanel">
+
+
+<h2>
+LIVE ANALYSIS
+</h2>
+
+
+<p>
+Digits collected:
+
+{analysis?.digits?.length || 0}
+
+</p>
+
+
+
+<p>
+Prediction:
+
+{analysis?.prediction}
+
+</p>
+
+
+
+</div>
+
+
+
+
+
+
+
+
+<button
+
+className="logout"
+
+onClick={()=>{
+
+
+localStorage.removeItem("token");
+
+setLoggedIn(false);
+
+
+}}
+
+>
+
+LOGOUT
+
+</button>
+
+
+
+
+</div>
+
+
+);
+
+
+
+}
+
+
+export default App;

@@ -1,0 +1,349 @@
+import React, { useEffect, useState } from "react";
+
+
+function MarketAnalyzer(){
+
+
+    const [market,setMarket] = useState("R_100");
+
+
+    const [signal,setSignal] = useState({});
+
+
+    const [entry,setEntry] = useState({});
+
+
+    const [digits,setDigits] = useState([]);
+
+
+
+    const markets = [
+
+        "R_10",
+        "R_25",
+        "R_50",
+        "R_75",
+        "R_100",
+        "1HZ10V",
+        "1HZ25V",
+        "1HZ50V",
+        "1HZ75V",
+        "1HZ100V",
+        "JD10",
+        "JD25",
+        "JD50",
+        "JD75",
+        "JD100"
+
+    ];
+
+
+
+
+
+    useEffect(()=>{
+
+
+        const timer=setInterval(()=>{
+
+
+            fetch("http://localhost:5000/signal")
+
+            .then(res=>res.json())
+
+            .then(data=>{
+
+
+                setSignal(data.signal);
+
+                setEntry(data.entry);
+
+
+            });
+
+
+
+            fetch("http://localhost:5000/digits")
+
+            .then(res=>res.json())
+
+            .then(data=>{
+
+
+                setDigits(data.digits || []);
+
+
+
+            });
+
+
+
+        },1000);
+
+
+
+
+        return ()=>clearInterval(timer);
+
+
+
+    },[]);
+
+
+
+
+
+
+
+    const changeMarket=async(symbol)=>{
+
+
+        await fetch(
+
+            `http://localhost:5000/change-market/${symbol}`,
+
+            {
+
+                method:"POST"
+
+            }
+
+        );
+
+
+        setMarket(symbol);
+
+
+    };
+
+
+
+
+
+
+return(
+
+
+<div className="analyzer">
+
+
+
+<h2>
+Kerry Prime Trading Hub
+</h2>
+
+
+
+
+<h3>
+Market Chooser
+</h3>
+
+
+
+<select
+
+value={market}
+
+onChange={(e)=>changeMarket(e.target.value)}
+
+>
+
+
+{
+markets.map((m)=>(
+
+
+<option key={m} value={m}>
+
+{m}
+
+</option>
+
+
+))
+
+}
+
+
+
+</select>
+
+
+
+
+
+
+<h3>
+Last Digits
+</h3>
+
+
+
+<div>
+
+
+{
+
+digits.slice(-30).map((d,i)=>(
+
+
+<span key={i}>
+
+{d} 
+
+</span>
+
+
+))
+
+
+}
+
+
+</div>
+
+
+
+
+
+
+
+<h3>
+Signal Scanner
+</h3>
+
+
+<p>
+
+Status:
+
+{signal.status}
+
+</p>
+
+
+
+<p>
+
+Prediction:
+
+{signal.prediction}
+
+</p>
+
+
+
+<p>
+
+Confidence:
+
+{signal.confidence}%
+
+</p>
+
+
+
+<p>
+
+Ticks:
+
+{signal.ticks}
+
+</p>
+
+
+
+
+
+
+<h3>
+Entry Scanner
+</h3>
+
+
+
+<p>
+
+Status:
+
+{entry.status}
+
+</p>
+
+
+
+
+<p>
+
+Candidates:
+
+{entry.candidates?.join(", ")}
+
+</p>
+
+
+
+
+<p>
+
+Entry Digit:
+
+{entry.entryDigit}
+
+</p>
+
+
+
+
+<p>
+
+Confirmations:
+
+{entry.confirmations}/3
+
+</p>
+
+
+
+
+
+
+<h3>
+Entry Patterns
+</h3>
+
+
+
+{
+
+entry.patterns?.map((p,i)=>(
+
+
+<p key={i}>
+
+Pattern {i+1}:
+
+{p.join(" → ")}
+
+</p>
+
+
+))
+
+}
+
+
+
+
+
+</div>
+
+
+);
+
+
+}
+
+
+export default MarketAnalyzer;

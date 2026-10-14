@@ -1,0 +1,31 @@
+# Private environment files and secrets
+
+.env
+.env.*
+!.env.example
+
+# Dependencies
+
+node_modules/
+
+# Build files
+
+client/dist/
+server/dist/
+dist/
+build/
+
+# Logs
+
+*.log
+npm-debug.log*
+
+# Operating system files
+
+.DS_Store
+Thumbs.db
+
+# Private keys and certificates
+
+*.pem
+*.key

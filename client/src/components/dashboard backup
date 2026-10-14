@@ -1,0 +1,60 @@
+function Dashboard() {
+
+  return (
+
+    <div className="dashboard">
+
+      <h1>
+        Trading Dashboard
+      </h1>
+
+
+      <div className="dashboard-cards">
+
+
+        <div className="card">
+          <h3>Balance</h3>
+          <p>$0.00</p>
+        </div>
+
+
+        <div className="card">
+          <h3>Profit/Loss</h3>
+          <p>$0.00</p>
+        </div>
+
+
+        <div className="card">
+          <h3>Status</h3>
+          <p>Waiting</p>
+        </div>
+
+
+      </div>
+
+
+      <div className="card">
+
+        <h3>
+          Market Analysis
+        </h3>
+
+        <p>
+          Latest Digit: -
+        </p>
+
+        <p>
+          Digit History: -
+        </p>
+
+      </div>
+
+
+    </div>
+
+  );
+
+}
+
+
+export default Dashboard;

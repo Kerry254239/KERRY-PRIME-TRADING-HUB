@@ -1,0 +1,1214 @@
+require("dotenv").config();
+
+const express = require("express");
+const cors = require("cors");
+const WebSocket = require("ws");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+
+// =========================
+// MEMORY
+// =========================
+
+let currentMarket = "R_100";
+
+let socket = null;
+
+let digits = [];
+
+let signal = {
+
+    status:"COLLECTING 100 TICKS",
+    prediction:"WAIT",
+    confidence:0,
+    ticks:0
+
+};
+
+
+let entry = {
+
+    status:"WAITING FOR SIGNAL",
+    prediction:"WAIT",
+    candidates:[],
+    entryDigit:null,
+    confirmations:0,
+    patterns:[],
+    confirmationTicks:[],
+    waitingConfirmation:false
+
+};
+
+
+
+// =========================
+// RESET ALL
+// =========================
+
+function resetAll(){
+
+
+    digits=[];
+
+
+    signal={
+
+        status:"COLLECTING 100 TICKS",
+        prediction:"WAIT",
+        confidence:0,
+        ticks:0
+
+    };
+
+
+
+    entry={
+
+        status:"WAITING FOR SIGNAL",
+        prediction:"WAIT",
+        candidates:[],
+        entryDigit:null,
+        confirmations:0,
+        patterns:[],
+        confirmationTicks:[],
+        waitingConfirmation:false
+
+    };
+
+
+}
+
+
+
+
+
+
+// =========================
+// DIGIT STATISTICS
+// =========================
+
+function calculateDigitStats(){
+
+
+    let stats={};
+
+
+
+    for(let i=0;i<=9;i++){
+
+        stats[i]=0;
+
+    }
+
+
+
+
+    digits.forEach(d=>{
+
+
+        stats[d]++;
+
+
+    });
+
+
+
+
+    for(let i=0;i<=9;i++){
+
+
+        stats[i]=Number(
+
+            ((stats[i]/digits.length)*100).toFixed(2)
+
+        );
+
+
+    }
+
+
+
+    return stats;
+
+
+}
+
+
+
+
+
+
+// =========================
+// SIGNAL SCANNER
+// =========================
+
+
+function analyzeSignal(){
+
+
+    if(digits.length < 100){
+
+        return;
+
+    }
+
+
+
+    let stats = calculateDigitStats();
+
+
+
+    // AGAINST OVER 2
+
+    let lowDigits =
+
+        stats[0] +
+
+        stats[1] +
+
+        stats[2];
+
+
+
+
+
+    // AGAINST UNDER 7
+
+    let highDigits =
+
+        stats[7] +
+
+        stats[8] +
+
+        stats[9];
+
+
+
+
+
+
+
+    // OVER 2 RULE
+
+    if(
+
+        lowDigits <=30 &&
+
+        (100-lowDigits)>=70
+
+    ){
+
+
+        signal.status="SIGNAL CONFIRMED";
+
+        signal.prediction="OVER 2";
+
+        signal.confidence=
+
+        Number((100-lowDigits).toFixed(2));
+
+
+        entry.status="SCANNING FIRST 5 DIGITS";
+
+        entry.prediction="OVER 2";
+
+
+        return;
+
+
+    }
+
+
+
+
+
+
+
+    // UNDER 7 RULE
+
+    if(
+
+        highDigits <=30 &&
+
+        (100-highDigits)>=70
+
+    ){
+
+
+        signal.status="SIGNAL CONFIRMED";
+
+        signal.prediction="UNDER 7";
+
+        signal.confidence=
+
+        Number((100-highDigits).toFixed(2));
+
+
+        entry.status="SCANNING FIRST 5 DIGITS";
+
+        entry.prediction="UNDER 7";
+
+
+        return;
+
+
+    }
+
+
+
+
+
+
+
+    signal.status="SIGNAL NOT READY";
+
+    signal.prediction="WAIT";
+
+    signal.confidence=0;
+
+
+
+}
+// =========================
+// ENTRY SCANNER
+// =========================
+
+
+function chooseEntry(){
+
+
+    let candidates = {};
+
+
+
+    entry.candidates.forEach(d=>{
+
+
+        if(
+            entry.prediction==="OVER 2"
+            &&
+            d>2
+        ){
+
+            if(!candidates[d])
+                candidates[d]=0;
+
+
+            candidates[d]++;
+
+        }
+
+
+
+        if(
+            entry.prediction==="UNDER 7"
+            &&
+            d<7
+        ){
+
+            if(!candidates[d])
+                candidates[d]=0;
+
+
+            candidates[d]++;
+
+        }
+
+
+
+    });
+
+
+
+
+
+
+    let best=null;
+
+    let lowest=999;
+
+
+
+
+    Object.keys(candidates).forEach(d=>{
+
+
+        if(candidates[d] < lowest){
+
+
+            lowest=candidates[d];
+
+            best=Number(d);
+
+
+        }
+
+
+
+    });
+
+
+
+
+
+
+    if(best!==null){
+
+
+        entry.entryDigit=best;
+
+
+        entry.status=
+
+        "TESTING ENTRY DIGIT "+best;
+
+
+
+    }
+    else{
+
+
+        resetEntry();
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+function checkConfirmation(){
+
+
+
+    if(entry.confirmationTicks.length!==3)
+
+        return;
+
+
+
+
+    let valid=true;
+
+
+
+    entry.confirmationTicks.forEach(d=>{
+
+
+        if(
+            entry.prediction==="OVER 2"
+            &&
+            d<=2
+        ){
+
+            valid=false;
+
+        }
+
+
+
+        if(
+            entry.prediction==="UNDER 7"
+            &&
+            d>=7
+        ){
+
+            valid=false;
+
+        }
+
+
+
+    });
+
+
+
+
+
+
+    if(valid){
+
+
+        entry.confirmations++;
+
+
+
+        entry.patterns.push([
+
+            entry.entryDigit,
+
+            ...entry.confirmationTicks
+
+        ]);
+
+
+
+        entry.status=
+
+        "CONFIRMATION "
+
+        +entry.confirmations
+
+        +"/3";
+
+
+
+
+        if(entry.confirmations>=3){
+
+
+            entry.status="ENTRY FOUND";
+
+
+        }
+
+
+
+    }
+    else{
+
+
+        resetEntry();
+
+
+    }
+
+
+
+
+
+    entry.confirmationTicks=[];
+
+    entry.waitingConfirmation=false;
+
+
+}
+
+
+
+
+
+
+
+// =========================
+// ENTRY SCANNER UPDATED
+// =========================
+
+
+// Choose best entry digit from the 5 candidates
+// Includes opposite digits also
+
+function chooseEntry(){
+
+
+    let frequency={};
+
+
+
+    entry.candidates.forEach(d=>{
+
+
+        if(frequency[d]===undefined){
+
+            frequency[d]=0;
+
+        }
+
+
+        frequency[d]++;
+
+
+    });
+
+
+
+
+    let selected=null;
+
+    let lowest=999;
+
+
+
+    Object.keys(frequency).forEach(d=>{
+
+
+        let digit=Number(d);
+
+
+
+        // allow every digit as entry trigger
+
+        if(frequency[digit] < lowest){
+
+
+            lowest=frequency[digit];
+
+            selected=digit;
+
+
+        }
+
+
+    });
+
+
+
+
+
+
+    if(selected!==null){
+
+
+        entry.entryDigit=selected;
+
+
+        entry.status=
+
+        "WAITING FOR ENTRY DIGIT "+selected;
+
+
+
+    }
+    else{
+
+
+        resetEntry();
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+
+function checkConfirmation(){
+
+
+
+    let valid=true;
+
+
+
+
+    entry.confirmationTicks.forEach(d=>{
+
+
+
+        // OVER 2
+        // confirmation must be 3-9
+
+
+        if(
+
+            entry.prediction==="OVER 2"
+
+            &&
+
+            d<=2
+
+        ){
+
+            valid=false;
+
+        }
+
+
+
+
+
+
+        // UNDER 7
+        // confirmation must be 0-6
+
+
+        if(
+
+            entry.prediction==="UNDER 7"
+
+            &&
+
+            d>=7
+
+        ){
+
+            valid=false;
+
+        }
+
+
+
+    });
+
+
+
+
+
+
+
+
+    if(valid){
+
+
+        entry.confirmations++;
+
+
+
+        entry.patterns.push([
+
+            entry.entryDigit,
+
+            ...entry.confirmationTicks
+
+        ]);
+
+
+
+        entry.status=
+
+        "CONFIRMATION "
+
+        +
+
+        entry.confirmations
+
+        +
+
+        "/3";
+
+
+
+
+
+
+        if(entry.confirmations>=3){
+
+
+            entry.status="ENTRY FOUND";
+
+
+        }
+
+
+
+    }
+    else{
+
+
+        resetEntry();
+
+
+    }
+
+
+
+
+
+    entry.confirmationTicks=[];
+
+    entry.waitingConfirmation=false;
+
+
+
+}
+
+
+
+
+
+
+
+
+function updateEntry(digit){
+
+
+
+    // collect first 5 candidates
+
+
+    if(entry.entryDigit===null){
+
+
+
+        if(entry.candidates.length<5){
+
+
+            entry.candidates.push(digit);
+
+
+            entry.status=
+
+            "COLLECTING 5 ENTRY CANDIDATES";
+
+
+
+            return;
+
+
+        }
+
+
+
+
+        chooseEntry();
+
+
+        return;
+
+
+
+    }
+
+
+
+
+
+
+    // wait for selected entry digit
+
+
+    if(!entry.waitingConfirmation){
+
+
+
+        if(digit===entry.entryDigit){
+
+
+
+            entry.waitingConfirmation=true;
+
+
+            entry.confirmationTicks=[];
+
+
+            entry.status=
+
+            "COLLECTING 3 CONFIRMATION TICKS";
+
+
+
+        }
+
+
+
+        return;
+
+
+
+    }
+
+
+
+
+
+
+
+
+    // collect the next 3 ticks
+    // entry digit is not counted
+
+
+    entry.confirmationTicks.push(digit);
+
+
+
+
+
+
+    if(entry.confirmationTicks.length===3){
+
+
+
+        checkConfirmation();
+
+
+
+    }
+
+
+
+
+}
+
+
+
+
+
+
+
+
+
+function resetEntry(){
+
+
+
+    entry.status=
+
+    "SCANNING NEW 5 ENTRY CANDIDATES";
+
+
+
+    entry.candidates=[];
+
+
+    entry.entryDigit=null;
+
+
+    entry.confirmations=0;
+
+
+    entry.patterns=[];
+
+
+    entry.confirmationTicks=[];
+
+
+    entry.waitingConfirmation=false;
+
+
+
+}
+
+
+
+
+
+
+
+
+function resetEntry(){
+
+
+    entry.status="WAITING FOR NEW PREDICTION";
+
+
+    entry.candidates=[];
+
+    entry.entryDigit=null;
+
+    entry.confirmations=0;
+
+    entry.patterns=[];
+
+    entry.confirmationTicks=[];
+
+    entry.waitingConfirmation=false;
+
+
+
+}
+
+
+
+
+
+
+
+
+
+// =========================
+// DERIV CONNECTION
+// =========================
+
+
+function connectDeriv(){
+
+
+
+    if(socket){
+
+
+        socket.close();
+
+
+    }
+
+
+
+
+
+    socket=new WebSocket(
+
+    "wss://ws.derivws.com/websockets/v3?app_id=1089"
+
+    );
+
+
+
+
+
+
+    socket.on("open",()=>{
+
+
+        console.log(
+
+        "Connected:",currentMarket
+
+        );
+
+
+
+        socket.send(JSON.stringify({
+
+            ticks:currentMarket,
+
+            subscribe:1
+
+        }));
+
+
+
+    });
+
+
+
+
+
+
+
+
+    socket.on("message",(msg)=>{
+
+
+        let data=JSON.parse(msg);
+
+
+
+        if(data.tick){
+
+
+
+            let digit=Number(
+
+            String(data.tick.quote).slice(-1)
+
+            );
+
+
+
+
+
+            digits.push(digit);
+
+
+
+            if(digits.length>100)
+
+                digits.shift();
+
+
+
+
+
+
+            signal.ticks=digits.length;
+
+
+
+
+
+            console.log(
+
+            currentMarket,
+
+            "Digit:",digit,
+
+            "Ticks:",digits.length
+
+            );
+
+
+
+
+
+
+
+            if(signal.prediction==="WAIT"){
+
+
+
+                if(digits.length===100){
+
+
+                    analyzeSignal();
+
+
+                }
+
+
+
+            }
+            else{
+
+
+                updateEntry(digit);
+
+
+            }
+
+
+
+        }
+
+
+
+    });
+
+
+
+}
+
+
+
+
+
+
+
+
+
+// =========================
+// ROUTES
+// =========================
+
+
+app.get("/digits",(req,res)=>{
+
+
+    res.json({
+
+        success:true,
+
+        market:currentMarket,
+
+        digits:digits
+
+
+    });
+
+
+
+});
+
+
+
+
+
+
+
+app.get("/signal",(req,res)=>{
+
+
+    res.json({
+
+        signal:signal,
+
+        entry:entry
+
+
+    });
+
+
+
+});
+
+
+
+
+
+
+
+
+app.post("/change-market/:symbol",(req,res)=>{
+
+
+    currentMarket=req.params.symbol;
+
+
+
+    resetAll();
+
+
+
+    connectDeriv();
+
+
+
+    res.json({
+
+        success:true,
+
+        market:currentMarket
+
+
+    });
+
+
+
+});
+
+
+
+
+
+
+
+
+app.post("/reset",(req,res)=>{
+
+
+    resetAll();
+
+
+
+    res.json({
+
+        success:true,
+
+        message:"Scanner reset"
+
+    });
+
+
+
+});
+
+
+
+
+
+
+
+
+
+app.listen(5000,()=>{
+
+
+console.log(
+
+"Kerry Prime Trading Hub running on port 5000"
+
+);
+
+
+
+connectDeriv();
+
+
+});

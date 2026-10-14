@@ -1,0 +1,319 @@
+const express = require("express");
+const cors = require("cors");
+const WebSocket = require("ws");
+
+
+const app = express();
+
+app.use(cors());
+
+
+let currentMarket = "R_100";
+
+
+let latestTick = {
+
+    price:null,
+    digit:null
+
+};
+
+
+let deriv = null;
+
+
+
+const marketNames = {
+
+    R_10:"Volatility 10 Index",
+    R_25:"Volatility 25 Index",
+    R_50:"Volatility 50 Index",
+    R_75:"Volatility 75 Index",
+    R_100:"Volatility 100 Index"
+
+};
+
+
+
+
+
+app.get("/",(req,res)=>{
+
+    res.send(
+        "Kerry Prime Trading Hub Server Running"
+    );
+
+});
+
+
+
+
+
+
+app.get("/tick",(req,res)=>{
+
+
+    res.json({
+
+        market:
+        marketNames[currentMarket],
+
+        price:
+        latestTick.price,
+
+        digit:
+        latestTick.digit
+
+
+    });
+
+
+});
+
+
+
+
+
+
+
+app.get("/change-market/:symbol",(req,res)=>{
+
+
+    const newMarket =
+    req.params.symbol;
+
+
+
+    console.log(
+        "Changing market to:",
+        newMarket
+    );
+
+
+
+    currentMarket = newMarket;
+
+
+
+    latestTick = {
+
+        price:null,
+
+        digit:null
+
+    };
+
+
+
+    startDeriv();
+
+
+
+
+    res.json({
+
+        success:true,
+
+        market:
+        marketNames[currentMarket]
+
+    });
+
+
+});
+
+
+
+
+
+
+
+app.listen(5000,()=>{
+
+
+console.log(
+"Server running on port 5000"
+);
+
+
+});
+
+
+
+
+
+
+
+
+
+function startDeriv(){
+
+
+
+if(deriv){
+
+
+try{
+
+deriv.terminate();
+
+}
+
+catch(error){}
+
+
+
+}
+
+
+
+
+
+deriv = new WebSocket(
+
+"wss://ws.derivws.com/websockets/v3?app_id=1089"
+
+);
+
+
+
+
+
+
+deriv.on("open",()=>{
+
+
+console.log(
+"Deriv connected"
+);
+
+
+
+deriv.send(JSON.stringify({
+
+ticks:currentMarket,
+
+subscribe:1
+
+
+}));
+
+
+
+console.log(
+
+"Subscribed:",
+currentMarket
+
+);
+
+
+
+});
+
+
+
+
+
+
+
+deriv.on("message",(message)=>{
+
+
+const data =
+JSON.parse(message);
+
+
+
+if(data.tick){
+
+
+
+latestTick.price =
+data.tick.quote;
+
+
+
+latestTick.digit =
+Number(
+
+String(data.tick.quote)
+.slice(-1)
+
+);
+
+
+
+console.log(
+
+currentMarket,
+
+latestTick.price,
+
+latestTick.digit
+
+);
+
+
+
+}
+
+
+
+
+});
+
+
+
+
+
+
+deriv.on("close",()=>{
+
+
+console.log(
+"Deriv disconnected"
+);
+
+
+
+setTimeout(()=>{
+
+startDeriv();
+
+},5000);
+
+
+
+});
+
+
+
+
+
+
+deriv.on("error",(err)=>{
+
+
+console.log(
+
+"Deriv error:",
+err.message
+
+);
+
+
+
+});
+
+
+
+}
+
+
+
+
+
+
+
+startDeriv();
