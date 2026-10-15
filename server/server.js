@@ -1,8 +1,5 @@
 require("dotenv").config();
 
-const JWT_SECRET = process.env.JWT_SECRET;
-const LOGIN_USERNAME = process.env.LOGIN_USERNAME;
-const LOGIN_PASSWORD = process.env.LOGIN_PASSWORD;
 
 const app = express();
 
