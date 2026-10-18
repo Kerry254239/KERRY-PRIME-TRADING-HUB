@@ -535,6 +535,33 @@ app.get("/digits", (req, res) => {
     analysis: analyzeMarket(symbol),
   });
 });
+app.get("/signal", (req, res) => {
+const symbol = req.query.symbol || currentMarket;
+
+if (!MARKETS.includes(symbol)) {
+return res.status(400).json({
+error: "Invalid market symbol.",
+allowedMarkets: MARKETS,
+});
+}
+
+const analysis = analyzeMarket(symbol);
+
+const signals = analysis.signals || [];
+
+const strongest = signals
+.filter((signal) => signal.status === "GAINING_POWER")
+.sort((a, b) => b.change - a.change)[0];
+
+return res.json({
+...analysis,
+prediction: strongest ? strongest.name : null,
+status: analysis.ready
+? analysis.overallStatus
+: "COLLECTING DATA",
+confidence: strongest ? strongest.recentPercentage : 0,
+});
+});
 
 app.get("/analysis", (req, res) => {
   const symbol = req.query.symbol || currentMarket;
