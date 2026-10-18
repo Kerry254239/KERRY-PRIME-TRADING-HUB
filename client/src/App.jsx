@@ -1,405 +1,355 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import "./App.css";
 
-const API = "http://localhost:5000";
-
-const STRATEGIES = [
-  {
-    name: "OVER 2",
-    description: "Digits greater than 2",
-    digits: [3, 4, 5, 6, 7, 8, 9],
-  },
-  {
-    name: "UNDER 7",
-    description: "Digits less than 7",
-    digits: [0, 1, 2, 3, 4, 5, 6],
-  },
-  {
-    name: "EVEN",
-    description: "Even digits",
-    digits: [0, 2, 4, 6, 8],
-  },
-  {
-    name: "ODD",
-    description: "Odd digits",
-    digits: [1, 3, 5, 7, 9],
-  },
-];
+const API = (import.meta.env.VITE_API_URL || "http://localhost:5000").replace(/\/$/, "");
 
 const MARKETS = [
-  "R_10",
-  "R_25",
-  "R_50",
-  "R_75",
-  "R_100",
-  "1HZ10V",
-  "1HZ25V",
-  "1HZ50V",
-  "1HZ75V",
-  "1HZ100V",
+"R_10", "R_25", "R_50", "R_75", "R_100",
+"1HZ10V", "1HZ25V", "1HZ50V", "1HZ75V", "1HZ100V"
 ];
 
-function getDigit(value, decimals = 2) {
-  const number = Number(value);
+export default function App() {
+const [market, setMarket] = useState("R_100");
+const [digits, setDigits] = useState([]);
+const [signal, setSignal] = useState({});
+const [entry, setEntry] = useState({});
+const [connection, setConnection] = useState("CONNECTING");
+const [error, setError] = useState("");
 
-  if (!Number.isFinite(number)) return null;
+useEffect(() => {
+let active = true;
 
-  const fixed = Math.abs(number).toFixed(decimals);
-  const digitsOnly = fixed.replace(".", "");
 
-  return Number(digitsOnly.slice(-1));
+async function refresh() {
+  try {
+    const [digitResponse, signalResponse] = await Promise.all([
+      fetch(`${API}/digits`),
+      fetch(`${API}/signal`)
+    ]);
+
+    if (!digitResponse.ok) {
+      throw new Error(`Digits endpoint: HTTP ${digitResponse.status}`);
+    }
+
+    if (!signalResponse.ok) {
+      throw new Error(`Signal endpoint: HTTP ${signalResponse.status}`);
+    }
+
+    const digitData = await digitResponse.json();
+    const signalData = await signalResponse.json();
+
+    if (!active) return;
+
+    const received = Array.isArray(digitData)
+      ? digitData
+      : digitData.digits || digitData.history || [];
+
+    setDigits(received.slice(-40).reverse());
+    setSignal(signalData.signal || signalData);
+    setEntry(signalData.entry || {});
+    setConnection("CONNECTED");
+    setError("");
+  } catch (err) {
+    if (active) {
+      setConnection("DISCONNECTED");
+      setError(err.message || "Unable to reach backend.");
+    }
+  }
 }
 
-function App() {
-  const [market, setMarket] = useState("R_100");
-  const [digits, setDigits] = useState([]);
-  const [quote, setQuote] = useState(null);
-  const [connection, setConnection] = useState("Connecting");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+refresh();
 
-  // Read the current market and its recent digits from the backend.
-  async function loadData() {
-    try {
-      const response = await fetch(`${API}/digits`);
+const timer = setInterval(refresh, 1500);
 
-      if (!response.ok) {
-        throw new Error("Could not retrieve market digits.");
-      }
+return () => {
+  active = false;
+  clearInterval(timer);
+};
+}, [market]);
 
-      const data = await response.json();
+async function changeMarket(event) {
+const selected = event.target.value;
+setMarket(selected);
+setDigits([]);
+setError("");
 
-      // Support several common backend response formats.
-      const rawHistory =
-        data.digits ??
-        data.history ??
-        data.lastDigits ??
-        data.data?.digits ??
-        data.data?.history ??
-        [];
-
-      if (Array.isArray(rawHistory)) {
-        const parsedDigits = rawHistory
-          .map((item) => {
-            if (typeof item === "number" || typeof item === "string") {
-              const number = Number(item);
-
-              return Number.isInteger(number) &&
-                number >= 0 &&
-                number <= 9
-                ? number
-                : null;
-            }
-
-            if (item && typeof item === "object") {
-              if (item.digit !== undefined) {
-                return Number(item.digit);
-              }
-
-              if (item.quote !== undefined) {
-                return getDigit(item.quote, item.pip_size ?? 2);
-              }
-
-              if (item.tick?.quote !== undefined) {
-                return getDigit(
-                  item.tick.quote,
-                  item.tick.pip_size ?? 2
-                );
-              }
-            }
-
-            return null;
-          })
-          .filter(
-            (digit) =>
-              Number.isInteger(digit) && digit >= 0 && digit <= 9
-          );
-
-        setDigits(parsedDigits.slice(-100));
-      }
-
-      if (data.quote !== undefined) {
-        setQuote(data.quote);
-      }
-
-      setConnection("Connected");
-      setError("");
-    } catch (err) {
-      setConnection("Backend unavailable");
-      setError(
-        "Cannot read the analysis data. Check that your backend is running."
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Refresh the digits every second.
-  useEffect(() => {
-    loadData();
-
-    const timer = setInterval(loadData, 1000);
-
-    return () => clearInterval(timer);
-  }, []);
-
-  // Change the market through the existing backend endpoint.
-  async function changeMarket(event) {
-    const selectedMarket = event.target.value;
-
-    setMarket(selectedMarket);
-    setDigits([]);
-    setQuote(null);
-    setLoading(true);
-
-    try {
-      const response = await fetch(`${API}/change-market`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          symbol: selectedMarket,
-          market: selectedMarket,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Market change failed.");
-      }
-
-      setConnection("Connecting");
-      setError("");
-    } catch (err) {
-      setError(
-        "The backend could not change the market. Your existing market may still be active."
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Calculate each strategy's frequency from the collected digits.
-  function analyze(strategy) {
-    const total = digits.length;
-
-    const matches = digits.filter((digit) =>
-      strategy.digits.includes(digit)
-    ).length;
-
-    const percentage =
-      total > 0 ? (matches / total) * 100 : 0;
-
-    return {
-      total,
-      matches,
-      percentage,
-    };
-  }
-
-  const latestDigits = [...digits].reverse().slice(0, 20);
-
-  return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <div className="brand-logo">KP</div>
-
-          <div>
-            <h1>KERRY PRIME</h1>
-            <p>TRADING HUB</p>
-          </div>
-        </div>
-
-        <div className="connection">
-          <span
-            className={`connection-dot ${
-              connection === "Connected" ? "online" : ""
-            }`}
-          />
-
-          <span>{connection}</span>
-        </div>
-      </header>
-
-      <main className="main">
-        <section className="welcome">
-          <div>
-            <p className="eyebrow">LIVE MARKET ANALYTICS</p>
-            <h2>Market Analysis Dashboard</h2>
-            <p className="subtitle">
-              Monitor digit frequency and compare four trading categories.
-            </p>
-          </div>
-
-          <div className="market-selector">
-            <label htmlFor="market">SELECT MARKET</label>
-
-            <select
-              id="market"
-              value={market}
-              onChange={changeMarket}
-            >
-              {MARKETS.map((item) => (
-                <option value={item} key={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </div>
-        </section>
-
-        {error && <div className="error-message">{error}</div>}
-
-        <section className="overview-grid">
-          <div className="overview-card">
-            <span className="card-label">SELECTED MARKET</span>
-            <strong>{market}</strong>
-            <span className="muted">Current analysis symbol</span>
-          </div>
-
-          <div className="overview-card">
-            <span className="card-label">DIGITS COLLECTED</span>
-            <strong>{digits.length}</strong>
-            <span className="muted">Maximum history: 100 digits</span>
-          </div>
-
-          <div className="overview-card">
-            <span className="card-label">LATEST DIGIT</span>
-            <strong className="latest-number">
-              {digits.length > 0 ? digits[digits.length - 1] : "—"}
-            </strong>
-            <span className="muted">Most recently collected</span>
-          </div>
-
-          <div className="overview-card">
-            <span className="card-label">CURRENT QUOTE</span>
-            <strong className="quote">
-              {quote !== null ? quote : "—"}
-            </strong>
-            <span className="muted">Latest quote, if provided</span>
-          </div>
-        </section>
-
-        <section className="section-heading">
-          <div>
-            <h2>Strategy Analysis</h2>
-            <p>
-              Frequency of each category in the available digit history.
-            </p>
-          </div>
-
-          <span className="history-badge">
-            {digits.length} DIGITS ANALYZED
-          </span>
-        </section>
-
-        <section className="strategy-grid">
-          {STRATEGIES.map((strategy) => {
-            const result = analyze(strategy);
-
-            return (
-              <article className="strategy-card" key={strategy.name}>
-                <div className="strategy-header">
-                  <div>
-                    <h3>{strategy.name}</h3>
-                    <p>{strategy.description}</p>
-                  </div>
-
-                  <div className="strategy-symbol">
-                    {strategy.name === "OVER 2" && ">"}
-                    {strategy.name === "UNDER 7" && "<"}
-                    {strategy.name === "EVEN" && "E"}
-                    {strategy.name === "ODD" && "O"}
-                  </div>
-                </div>
-
-                <div className="percentage">
-                  {result.total > 0
-                    ? `${result.percentage.toFixed(1)}%`
-                    : "—"}
-                </div>
-
-                <div className="progress-track">
-                  <div
-                    className="progress-fill"
-                    style={{
-                      width: `${result.percentage}%`,
-                    }}
-                  />
-                </div>
-
-                <div className="stats-row">
-                  <div>
-                    <span className="stat-label">MATCHES</span>
-                    <strong>{result.matches}</strong>
-                  </div>
-
-                  <div>
-                    <span className="stat-label">NON-MATCHES</span>
-                    <strong>
-                      {result.total - result.matches}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span className="stat-label">SAMPLE</span>
-                    <strong>{result.total}</strong>
-                  </div>
-                </div>
-
-                <div className="digit-list">
-                  {strategy.digits.map((digit) => (
-                    <span className="digit-chip" key={digit}>
-                      {digit}
-                    </span>
-                  ))}
-                </div>
-              </article>
-            );
-          })}
-        </section>
-
-        <section className="history-section">
-          <div className="section-heading">
-            <div>
-              <h2>Latest Digits</h2>
-              <p>Newest digit appears first.</p>
-            </div>
-          </div>
-
-          <div className="digit-history">
-            {latestDigits.length > 0 ? (
-              latestDigits.map((digit, index) => (
-                <span
-                  className={`history-digit ${
-                    index === 0 ? "latest-history-digit" : ""
-                  }`}
-                  key={`${index}-${digit}`}
-                >
-                  {digit}
-                </span>
-              ))
-            ) : (
-              <p className="empty-state">
-                {loading
-                  ? "Loading market digits..."
-                  : "Waiting for digit history from the backend..."}
-              </p>
-            )}
-          </div>
-        </section>
-
-        <div className="notice">
-          <strong>Risk notice:</strong> These percentages describe historical
-          frequency in the collected sample. They do not predict or guarantee
-          the next result. OVER 2 and UNDER 7 overlap on digits 3–6.
-        </div>
-
-        <footer className="footer">
-          KERRY PRIME TRADING HUB · MARKET ANALYSIS
-        </footer>
-      </main>
-    </div>
+try {
+  const response = await fetch(
+    `${API}/change-market/${encodeURIComponent(selected)}`,
+    { method: "POST" }
   );
+
+  if (!response.ok) {
+    throw new Error(`Market change failed: HTTP ${response.status}`);
+  }
+} catch (err) {
+  setError(err.message);
+}
+
+}
+
+function digitValue(item) {
+if (item && typeof item === "object") {
+if (item.digit !== undefined) return item.digit;
+if (item.last_digit !== undefined) return item.last_digit;
+if (item.quote !== undefined) {
+return String(item.quote).slice(-1);
+}
+}
+
+return item;
+
+}
+
+const latestDigit = digits.length
+? digitValue(digits[digits.length - 1])
+: "—";
+
+const prediction =
+signal.prediction || signal.direction || "WAIT";
+
+const signalStatus =
+signal.status || "COLLECTING DATA";
+
+const cardStyle = {
+background: "#111c2e",
+border: "1px solid #263750",
+borderRadius: "12px",
+padding: "22px",
+minWidth: 0
+};
+
+const labelStyle = {
+color: "#9aadc5",
+fontSize: "12px",
+letterSpacing: "1px",
+marginBottom: "12px"
+};
+
+return (
+<div style={{
+minHeight: "100vh",
+background: "#0b1220",
+color: "#edf4ff",
+fontFamily: "Arial, sans-serif",
+padding: "24px",
+boxSizing: "border-box"
+}}>
+<div style={{ maxWidth: "1400px", margin: "0 auto" }}>
+    <header style={{
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: "20px",
+      marginBottom: "30px"
+    }}>
+      <div>
+        <h1 style={{ fontSize: "28px", fontWeight: 800, margin: 0 }}>
+          KERRY PRIME
+        </h1>
+        <p style={{
+          margin: "6px 0",
+          color: "#20c7c9",
+          letterSpacing: "3px"
+        }}>
+          TRADING HUB
+        </p>
+        <small style={{ color: "#94a3b8" }}>
+          TRADE WITH CONFIDENCE
+        </small>
+      </div>
+
+      <div style={{
+        padding: "12px 16px",
+        borderRadius: "8px",
+        background: connection === "CONNECTED" ? "#123a2b" : "#40202a",
+        color: connection === "CONNECTED" ? "#4ade80" : "#fda4af",
+        fontWeight: "bold",
+        fontSize: "13px"
+      }}>
+        ● {connection}
+      </div>
+    </header>
+
+    {error && (
+      <div style={{
+        padding: "14px",
+        marginBottom: "20px",
+        borderRadius: "8px",
+        background: "#401e28",
+        color: "#fecaca",
+        overflowWrap: "anywhere"
+      }}>
+        {error}
+      </div>
+    )}
+
+    <section style={{
+      ...cardStyle,
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: "15px",
+      marginBottom: "20px"
+    }}>
+      <div>
+        <div style={labelStyle}>ACTIVE MARKET</div>
+
+        <select
+          value={market}
+          onChange={changeMarket}
+          style={{
+            padding: "12px",
+            borderRadius: "7px",
+            background: "#0b1220",
+            border: "1px solid #35465e",
+            color: "white",
+            minWidth: "160px"
+          }}
+        >
+          {MARKETS.map(item => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <div style={labelStyle}>LATEST DIGIT</div>
+        <strong style={{
+          fontSize: "36px",
+          color: "#20c7c9"
+        }}>
+          {latestDigit}
+        </strong>
+      </div>
+
+      <div>
+        <div style={labelStyle}>DIGITS LOADED</div>
+        <strong style={{ fontSize: "30px" }}>
+          {digits.length}
+        </strong>
+      </div>
+    </section>
+
+    <section style={{
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+      gap: "18px",
+      marginBottom: "20px"
+    }}>
+      <div style={cardStyle}>
+        <div style={labelStyle}>SIGNAL PREDICTION</div>
+        <h2 style={{
+          color: "#20c7c9",
+          fontSize: "27px",
+          margin: "10px 0"
+        }}>
+          {prediction}
+        </h2>
+        <p style={{ color: "#9aadc5" }}>
+          Confidence: {signal.confidence ?? signal.strength ?? 0}
+          {signal.confidence !== undefined ? "%" : ""}
+        </p>
+      </div>
+
+      <div style={cardStyle}>
+        <div style={labelStyle}>ANALYSIS STATUS</div>
+        <h2 style={{ fontSize: "21px" }}>
+          {signalStatus}
+        </h2>
+        <p style={{ color: "#9aadc5" }}>
+          Ticks analyzed: {signal.ticks ?? digits.length}
+        </p>
+      </div>
+
+      <div style={cardStyle}>
+        <div style={labelStyle}>ENTRY SCANNER</div>
+        <h2 style={{
+          fontSize: "21px",
+          overflowWrap: "anywhere"
+        }}>
+          {entry.status || "WAITING"}
+        </h2>
+        <p style={{ color: "#9aadc5" }}>
+          Entry digit: {entry.entryDigit ?? "—"}
+        </p>
+        <p style={{ color: "#9aadc5" }}>
+          Confirmations: {entry.confirmations ?? 0}
+        </p>
+      </div>
+    </section>
+
+    <section style={{
+      ...cardStyle,
+      marginBottom: "20px"
+    }}>
+      <h2 style={{ fontSize: "20px" }}>
+        Recent Digits
+      </h2>
+
+      <p style={{
+        color: "#9aadc5",
+        fontSize: "13px"
+      }}>
+        Latest digit history received from the backend.
+      </p>
+
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(45px, 1fr))",
+        gap: "9px"
+      }}>
+        {digits.length > 0 ? digits.map((item, index) => (
+          <div
+            key={index}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              height: "48px",
+              borderRadius: "8px",
+              background: index === 0 ? "#087f8c" : "#1e2b40",
+              border: "1px solid #33465f",
+              fontSize: "20px",
+              fontWeight: "bold"
+            }}
+          >
+            {digitValue(item)}
+          </div>
+        )) : (
+          <p style={{ color: "#fbbf24" }}>
+            Waiting for live digits from the backend...
+          </p>
+        )}
+      </div>
+    </section>
+
+    <section style={cardStyle}>
+      <h2 style={{ fontSize: "20px" }}>
+        Connection Information
+      </h2>
+
+      <p style={{ color: "#9aadc5", lineHeight: 1.8 }}>
+        Dashboard API: {API}<br />
+        Active market: {market}<br />
+        Backend status: {connection}<br />
+        Live digits received: {digits.length}
+      </p>
+    </section>
+
+    <footer style={{
+      textAlign: "center",
+      color: "#64748b",
+      fontSize: "12px",
+      marginTop: "30px"
+    }}>
+      KERRY PRIME TRADING HUB · TRADE WITH CONFIDENCE
+    </footer>
+  </div>
+</div>
+);
 }
