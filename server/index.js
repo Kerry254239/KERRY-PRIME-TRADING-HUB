@@ -1,44 +1,52 @@
-require("dotenv").config();
-
 const express = require("express");
 const cors = require("cors");
 const WebSocket = require("ws");
 
 const app = express();
+const PORT = 5000;
 
 app.use(cors());
 app.use(express.json());
 
-// =====================================
-// SETTINGS
-// =====================================
-
-const PORT = 5000;
-const WINDOW_SIZE = 30;
+const MARKETS = [
+  "R_10",
+  "R_25",
+  "R_50",
+  "R_75",
+  "R_100",
+  "1HZ10V",
+  "1HZ25V",
+  "1HZ50V",
+  "1HZ75V",
+  "1HZ100V",
+];
 
 let currentMarket = "R_100";
 let socket = null;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let connected = false;
+let lastError = "";
 
-// =====================================
-// MEMORY
-// =====================================
+const digits = [];
+const prices = [];
 
-let digits = [];
-
-let signal = {
-
-    status: "COLLECTING 30 TICKS",
-    prediction: "WAIT",
-    strength: 0,
-    trend: "STABLE",
-    pressure: "NONE",
-    stability: "UNKNOWN",
-    ticks: 0
-
+const signal = {
+  status: "COLLECTING 100 TICKS",
+  prediction: "WAIT",
+  confidence: 0,
+  strength: 0,
+  trend: "STABLE",
+  pressure: "NONE",
+  stability: "UNKNOWN",
+  ticks: 0,
+  digitStats: {},
 };
 
-let entry = {
+let entry = createEntry();
 
+function createEntry() {
+  return {
     status: "WAITING FOR SIGNAL",
     prediction: "WAIT",
     candidates: [],
@@ -46,635 +54,452 @@ let entry = {
     confirmations: 0,
     patterns: [],
     confirmationTicks: [],
-    waitingConfirmation: false
-
-};
-
-let previousStrength = 0;
-
-// =====================================
-// RESET FUNCTIONS
-// =====================================
-
-function resetSignal() {
-
-    signal = {
-
-        status: "COLLECTING 30 TICKS",
-        prediction: "WAIT",
-        strength: 0,
-        trend: "STABLE",
-        pressure: "NONE",
-        stability: "UNKNOWN",
-        ticks: 0
-
-    };
-
+    waitingConfirmation: false,
+  };
 }
 
-function resetEntry() {
+function resetAnalysis() {
+  digits.length = 0;
+  prices.length = 0;
 
-    entry = {
+  Object.assign(signal, {
+    status: "COLLECTING 100 TICKS",
+    prediction: "WAIT",
+    confidence: 0,
+    strength: 0,
+    trend: "STABLE",
+    pressure: "NONE",
+    stability: "UNKNOWN",
+    ticks: 0,
+    digitStats: {},
+  });
 
-        status: "WAITING FOR SIGNAL",
-        prediction: signal.prediction,
-        candidates: [],
-        entryDigit: null,
-        confirmations: 0,
-        patterns: [],
-        confirmationTicks: [],
-        waitingConfirmation: false
-
-    };
-
+  entry = createEntry();
 }
 
-function resetAll() {
-
-    digits = [];
-
-    previousStrength = 0;
-
-    resetSignal();
-
-    resetEntry();
-
+function getPipSize(quote) {
+  const text = String(quote);
+  const decimalPart = text.split(".")[1];
+  return decimalPart ? decimalPart.length : 0;
 }
 
-// =====================================
-// TICK ENGINE
-// =====================================
-
-function addTick(digit) {
-
-    digits.push(digit);
-
-    if (digits.length > WINDOW_SIZE) {
-
-        digits.shift();
-
-    }
-
-    signal.ticks = digits.length;
-
+function getLastDigit(quote, pipSize) {
+  const formatted = Number(quote).toFixed(pipSize);
+  return Number(formatted.slice(-1));
 }
 
-// =====================================
-// DIGIT STATISTICS
-// =====================================
+function calculateStats() {
+  const stats = {};
 
-function calculateDigitStats() {
+  for (let i = 0; i <= 9; i++) {
+    stats[i] = 0;
+  }
 
-    const stats = {};
+  for (const item of digits) {
+    stats[item.digit]++;
+  }
 
-    for (let i = 0; i <= 9; i++) {
+  const total = digits.length || 1;
 
-        stats[i] = 0;
+  for (let i = 0; i <= 9; i++) {
+    stats[i] = Number(((stats[i] / total) * 100).toFixed(2));
+  }
 
-    }
-
-    for (const digit of digits) {
-
-        stats[digit]++;
-
-    }
-
-    // Convert counts to percentages
-    const total = digits.length || 1;
-
-    for (let i = 0; i <= 9; i++) {
-
-        stats[i] = Number(
-            ((stats[i] / total) * 100).toFixed(2)
-        );
-
-    }
-
-    return stats;
-
+  return stats;
 }
-// =====================================
-// SIGNAL SCANNER V4
-// =====================================
 
 function analyzeSignal() {
+  const total = digits.length;
+  signal.ticks = total;
+  signal.digitStats = calculateStats();
 
-    if (digits.length < WINDOW_SIZE) {
-
-        signal.status = "COLLECTING 30 TICKS";
-        signal.prediction = "WAIT";
-        signal.strength = 0;
-
-        return;
-
-    }
-
-    const stats = calculateDigitStats();
-
-    const low = [
-
-        stats[0],
-
-        stats[1],
-
-        stats[2]
-
-    ];
-
-    const high = [
-
-        stats[7],
-
-        stats[8],
-
-        stats[9]
-
-    ];
-
-    // Count weak digits
-
-    const weakLow = low.filter(x => x < 7).length;
-
-    const weakHigh = high.filter(x => x < 7).length;
-
-    signal.status = "SIGNAL NOT READY";
-
+  if (total < 100) {
+    signal.status = "COLLECTING 100 TICKS";
     signal.prediction = "WAIT";
-
+    signal.confidence = 0;
     signal.strength = 0;
+    entry = createEntry();
+    return;
+  }
 
-    // OVER 2
+  const stats = signal.digitStats;
 
-    if (weakLow >= 2) {
+  const over2 = digits.filter((item) => item.digit > 2).length;
+  const under7 = digits.filter((item) => item.digit < 7).length;
 
-        signal.prediction = "OVER 2";
+  const overPercentage = (over2 / total) * 100;
+  const underPercentage = (under7 / total) * 100;
 
-        signal.status = "SIGNAL CONFIRMED";
+  if (overPercentage > underPercentage) {
+    signal.prediction = "OVER 2";
+    signal.confidence = Number(overPercentage.toFixed(2));
+    signal.strength = Number((overPercentage - 50).toFixed(2));
+  } else if (underPercentage > overPercentage) {
+    signal.prediction = "UNDER 7";
+    signal.confidence = Number(underPercentage.toFixed(2));
+    signal.strength = Number((underPercentage - 50).toFixed(2));
+  } else {
+    signal.prediction = "WAIT";
+    signal.confidence = 0;
+    signal.strength = 0;
+  }
 
-        signal.strength = weakLow;
+  signal.status =
+    signal.prediction === "WAIT" ? "SIGNAL NOT READY" : "ANALYSIS READY";
 
-    }
+  const recent = digits.slice(-20);
+  const recentOver = recent.filter((item) => item.digit > 2).length;
+  const recentUnder = recent.filter((item) => item.digit < 7).length;
 
-    // UNDER 7
+  signal.trend =
+    recentOver > recentUnder
+      ? "OVER PRESSURE"
+      : recentUnder > recentOver
+        ? "UNDER PRESSURE"
+        : "STABLE";
 
-    else if (weakHigh >= 2) {
+  signal.pressure = signal.trend;
+  signal.stability = total >= 100 ? "100 TICKS AVAILABLE" : "COLLECTING";
 
-        signal.prediction = "UNDER 7";
-
-        signal.status = "SIGNAL CONFIRMED";
-
-        signal.strength = weakHigh;
-
-    }
-
-    // Trend
-
-    if (signal.strength > previousStrength)
-
-        signal.trend = "GAINING";
-
-    else if (signal.strength < previousStrength)
-
-        signal.trend = "LOSING";
-
-    else
-
-        signal.trend = "STABLE";
-
-    previousStrength = signal.strength;
-
-}
-// =====================================
-// ENTRY SCANNER
-// =====================================
-
-function chooseEntry() {
-
-    if (entry.candidates.length < 5) return;
-
-    let counts = {};
-
-    entry.candidates.forEach(d => {
-
-        counts[d] = (counts[d] || 0) + 1;
-
-    });
-
-    let bestDigit = null;
-    let lowestCount = 999;
-
-    Object.keys(counts).forEach(d => {
-
-        if (counts[d] < lowestCount) {
-
-            lowestCount = counts[d];
-            bestDigit = Number(d);
-
-        }
-
-    });
-
-    entry.entryDigit = bestDigit;
-
-    entry.status = "WAITING FOR ENTRY DIGIT " + bestDigit;
-
-}
-
-function checkConfirmation() {
-
-    let valid = true;
-
-    for (const d of entry.confirmationTicks) {
-
-        if (
-            entry.prediction === "OVER 2" &&
-            d <= 2
-        ) {
-            valid = false;
-        }
-
-        if (
-            entry.prediction === "UNDER 7" &&
-            d >= 7
-        ) {
-            valid = false;
-        }
-
-    }
-
-    if (valid) {
-
-        entry.confirmations++;
-
-        entry.patterns.push({
-
-            trigger: entry.entryDigit,
-            ticks: [...entry.confirmationTicks]
-
-        });
-
-        if (entry.confirmations >= 3) {
-
-            entry.status = "ENTRY FOUND";
-
-        } else {
-
-            entry.status =
-                "CONFIRMATION " +
-                entry.confirmations +
-                "/3";
-
-        }
-
-    } else {
-
-        resetEntry();
-        return;
-
-    }
-
-    entry.confirmationTicks = [];
-    entry.waitingConfirmation = false;
-
+  updateEntry(digits[digits.length - 1].digit);
 }
 
 function updateEntry(digit) {
+  if (signal.prediction === "WAIT") {
+    entry = createEntry();
+    return;
+  }
 
-    if (signal.prediction === "WAIT") {
+  if (entry.prediction !== signal.prediction) {
+    entry = createEntry();
+    entry.prediction = signal.prediction;
+  }
 
-        resetEntry();
-        return;
+  if (entry.confirmations >= 3) {
+    entry.status = "ENTRY CONFIRMED - WAITING FOR NEW SIGNAL";
+    return;
+  }
 
+  if (entry.entryDigit === null) {
+    entry.candidates.push(digit);
+
+    if (entry.candidates.length > 5) {
+      entry.candidates.shift();
     }
 
-    if (entry.entryDigit === null) {
+    entry.status = `COLLECTING CANDIDATES ${entry.candidates.length}/5`;
 
-        entry.candidates.push(digit);
+    if (entry.candidates.length === 5) {
+      const counts = {};
 
-        entry.status = "COLLECTING 5 CANDIDATES";
+      for (const candidate of entry.candidates) {
+        counts[candidate] = (counts[candidate] || 0) + 1;
+      }
 
-        if (entry.candidates.length >= 5) {
+      // Select the least frequent candidate digit.
+      let bestDigit = 0;
+      let lowestCount = Infinity;
 
-            chooseEntry();
-
+      for (let i = 0; i <= 9; i++) {
+        if ((counts[i] || 0) < lowestCount) {
+          lowestCount = counts[i] || 0;
+          bestDigit = i;
         }
+      }
 
-        return;
-
+      entry.entryDigit = bestDigit;
+      entry.status = `WAITING FOR ENTRY DIGIT ${bestDigit}`;
     }
 
-    if (!entry.waitingConfirmation) {
+    return;
+  }
 
-        if (digit === entry.entryDigit) {
-
-            entry.waitingConfirmation = true;
-
-            entry.confirmationTicks = [];
-
-            entry.status =
-                "COLLECTING CONFIRMATION";
-
-        }
-
-        return;
-
+  if (!entry.waitingConfirmation) {
+    if (digit === entry.entryDigit) {
+      entry.waitingConfirmation = true;
+      entry.confirmationTicks = [];
+      entry.status = "COLLECTING 3 CONFIRMATION TICKS";
     }
 
-    entry.confirmationTicks.push(digit);
+    return;
+  }
 
-    if (entry.confirmationTicks.length === 3) {
+  entry.confirmationTicks.push(digit);
 
-        checkConfirmation();
+  if (entry.confirmationTicks.length < 3) {
+    return;
+  }
 
-    }
+  const valid =
+    signal.prediction === "OVER 2"
+      ? entry.confirmationTicks.every((d) => d > 2)
+      : entry.confirmationTicks.every((d) => d < 7);
 
-}
-// =====================================
-// ENTRY SCANNER
-// =====================================
+  if (valid) {
+    entry.confirmations++;
 
-function chooseEntry() {
-
-    if (entry.candidates.length < 5) return;
-
-    let counts = {};
-
-    entry.candidates.forEach(d => {
-
-        counts[d] = (counts[d] || 0) + 1;
-
+    entry.patterns.push({
+      trigger: entry.entryDigit,
+      ticks: [...entry.confirmationTicks],
     });
 
-    let bestDigit = null;
-    let lowestCount = 999;
+    entry.status =
+      entry.confirmations >= 3
+        ? "ENTRY FOUND"
+        : `CONFIRMATION ${entry.confirmations}/3`;
+  } else {
+    entry.status = "CONFIRMATION FAILED - WAITING FOR ENTRY DIGIT";
+  }
 
-    Object.keys(counts).forEach(d => {
-
-        if (counts[d] < lowestCount) {
-
-            lowestCount = counts[d];
-            bestDigit = Number(d);
-
-        }
-
-    });
-
-    entry.entryDigit = bestDigit;
-
-    entry.status = "WAITING FOR ENTRY DIGIT " + bestDigit;
-
+  entry.confirmationTicks = [];
+  entry.waitingConfirmation = false;
 }
 
-function checkConfirmation() {
+function saveTick(quote, epoch) {
+  const pipSize = getPipSize(quote);
+  const digit = getLastDigit(quote, pipSize);
 
-    let valid = true;
+  const item = {
+    digit,
+    quote: Number(quote),
+    epoch: Number(epoch) || Math.floor(Date.now() / 1000),
+  };
 
-    for (const d of entry.confirmationTicks) {
+  digits.push(item);
+  prices.push({
+    quote: item.quote,
+    epoch: item.epoch,
+  });
 
-        if (
-            entry.prediction === "OVER 2" &&
-            d <= 2
-        ) {
-            valid = false;
-        }
+  if (digits.length > 100) digits.shift();
+  if (prices.length > 500) prices.shift();
 
-        if (
-            entry.prediction === "UNDER 7" &&
-            d >= 7
-        ) {
-            valid = false;
-        }
-
-    }
-
-    if (valid) {
-
-        entry.confirmations++;
-
-        entry.patterns.push({
-
-            trigger: entry.entryDigit,
-            ticks: [...entry.confirmationTicks]
-
-        });
-
-        if (entry.confirmations >= 3) {
-
-            entry.status = "ENTRY FOUND";
-
-        } else {
-
-            entry.status =
-                "CONFIRMATION " +
-                entry.confirmations +
-                "/3";
-
-        }
-
-    } else {
-
-        resetEntry();
-        return;
-
-    }
-
-    entry.confirmationTicks = [];
-    entry.waitingConfirmation = false;
-
+  analyzeSignal();
 }
 
-function updateEntry(digit) {
+function scheduleReconnect() {
+  if (reconnectTimer) return;
 
-    if (signal.prediction === "WAIT") {
+  connected = false;
 
-        resetEntry();
-        return;
+  reconnectAttempts++;
+  const delay = Math.min(15000, reconnectAttempts * 2000);
 
-    }
+  console.log(`Reconnecting to Deriv in ${delay / 1000} seconds...`);
 
-    if (entry.entryDigit === null) {
-
-        entry.candidates.push(digit);
-
-        entry.status = "COLLECTING 5 CANDIDATES";
-
-        if (entry.candidates.length >= 5) {
-
-            chooseEntry();
-
-        }
-
-        return;
-
-    }
-
-    if (!entry.waitingConfirmation) {
-
-        if (digit === entry.entryDigit) {
-
-            entry.waitingConfirmation = true;
-
-            entry.confirmationTicks = [];
-
-            entry.status =
-                "COLLECTING CONFIRMATION";
-
-        }
-
-        return;
-
-    }
-
-    entry.confirmationTicks.push(digit);
-
-    if (entry.confirmationTicks.length === 3) {
-
-        checkConfirmation();
-
-    }
-
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectDeriv();
+  }, delay);
 }
-// =====================================
-// DERIV CONNECTION
-// =====================================
 
 function connectDeriv() {
+  if (socket) {
+    try {
+      socket.removeAllListeners();
+      socket.terminate();
+    } catch (_) {}
 
-    if (socket) {
+    socket = null;
+  }
 
-        socket.close();
+  connected = false;
 
+  console.log(`Connecting to Deriv for ${currentMarket}...`);
+
+  const ws = new WebSocket(
+    "wss://ws.derivws.com/websockets/v3?app_id=1089",
+    {
+      handshakeTimeout: 15000,
+    }
+  );
+
+  socket = ws;
+
+  ws.on("open", () => {
+    if (socket !== ws) return;
+
+    reconnectAttempts = 0;
+    connected = true;
+    lastError = "";
+
+    console.log("Deriv WebSocket connected.");
+
+    ws.send(
+      JSON.stringify({
+        ticks: currentMarket,
+        subscribe: 1,
+      })
+    );
+  });
+
+  ws.on("message", (message) => {
+    if (socket !== ws) return;
+
+    let data;
+
+    try {
+      data = JSON.parse(message.toString());
+    } catch (_) {
+      return;
     }
 
-    socket = new WebSocket(
+    if (data.error) {
+      lastError = data.error.message || "Deriv returned an error.";
+      console.error("Deriv API error:", lastError);
+      return;
+    }
 
-        "wss://ws.derivws.com/websockets/v3?app_id=1089"
+    if (data.tick) {
+      saveTick(data.tick.quote, data.tick.epoch);
+    }
+  });
 
-    );
+  ws.on("error", (error) => {
+    if (socket !== ws) return;
 
-    socket.on("open", () => {
+    lastError = error.message || "WebSocket connection failed.";
+    connected = false;
 
-        console.log("Connected to", currentMarket);
+    console.error("Deriv WebSocket error:", lastError);
+  });
 
-        socket.send(JSON.stringify({
+  ws.on("close", () => {
+    if (socket !== ws) return;
 
-            ticks: currentMarket,
+    connected = false;
+    socket = null;
 
-            subscribe: 1
+    console.log("Deriv WebSocket disconnected.");
 
-        }));
-
-    });
-
-    socket.on("message", (msg) => {
-
-        const data = JSON.parse(msg);
-
-        if (!data.tick) return;
-
-        const digit = Number(
-
-            String(data.tick.quote).slice(-1)
-
-        );
-
-        // Save tick
-        addTick(digit);
-
-        // Analyze market every tick
-        analyzeSignal();
-
-        // Update entry every tick
-        updateEntry(digit);
-
-        console.log(
-            currentMarket,
-            "| Digit:", digit,
-            "| Signal:", signal.prediction,
-            "| Status:", signal.status
-        );
-
-    });
-
-    socket.on("close", () => {
-
-        console.log("Disconnected");
-
-    });
-
-    socket.on("error", (err) => {
-
-        console.log(err.message);
-
-    });
-
+    scheduleReconnect();
+  });
 }
+
 // =====================================
-// ROUTES
+// API ROUTES
 // =====================================
+
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    application: "Kerry Prime Trading Hub",
+    message: "Backend is running.",
+    endpoints: ["/health", "/digits", "/signal", "/status"],
+  });
+});
+
+app.get("/health", (req, res) => {
+  res.json({
+    success: true,
+    server: "ONLINE",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/status", (req, res) => {
+  res.json({
+    success: true,
+    backend: "CONNECTED",
+    deriv: connected ? "CONNECTED" : "DISCONNECTED",
+    market: currentMarket,
+    error: lastError,
+  });
+});
 
 app.get("/digits", (req, res) => {
-
-    res.json({
-
-        market: currentMarket,
-
-        digits
-
-    });
-
+  res.json({
+    success: true,
+    market: currentMarket,
+    digits: digits.map((item) => item.digit),
+    history: digits,
+    prices,
+    ticks: prices,
+    pip_size: prices.length
+      ? getPipSize(prices[prices.length - 1].quote)
+      : 2,
+    connected,
+    error: lastError,
+  });
 });
 
 app.get("/signal", (req, res) => {
-
-    res.json({
-
-        signal,
-
-        entry
-
-    });
-
+  res.json({
+    success: true,
+    signal,
+    entry,
+    digitStats: signal.digitStats,
+    market: currentMarket,
+    connected,
+    error: lastError,
+  });
 });
 
 app.post("/change-market/:symbol", (req, res) => {
+  const symbol = req.params.symbol;
 
-    currentMarket = req.params.symbol;
-
-    resetAll();
-
-    connectDeriv();
-
-    res.json({
-
-        success: true,
-
-        market: currentMarket
-
+  if (!MARKETS.includes(symbol)) {
+    return res.status(400).json({
+      success: false,
+      error: "Unsupported market.",
+      allowedMarkets: MARKETS,
     });
+  }
 
+  currentMarket = symbol;
+  resetAnalysis();
+  reconnectAttempts = 0;
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  connectDeriv();
+
+  return res.json({
+    success: true,
+    market: currentMarket,
+    message: "Market changed.",
+  });
 });
 
 app.post("/reset", (req, res) => {
+  resetAnalysis();
 
-    resetAll();
-
-    res.json({
-
-        success: true
-
-    });
-
+  res.json({
+    success: true,
+    message: "Analysis reset.",
+  });
 });
 
-// =====================================
-// START SERVER
-// =====================================
-
-app.listen(PORT, () => {
-
-    console.log(`Kerry Prime Trading Hub running on port ${PORT}`);
-
-    connectDeriv();
-
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: "Endpoint not found.",
+    path: req.originalUrl,
+  });
 });
+
+const server = app.listen(PORT, () => {
+  console.log(`Kerry Prime Trading Hub running on port ${PORT}`);
+  connectDeriv();
+});
+
+function shutdown() {
+  console.log("Shutting down server...");
+
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+
+  if (socket) {
+    try {
+      socket.terminate();
+    } catch (_) {}
+  }
+
+  server.close(() => process.exit(0));
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+

@@ -1,601 +1,597 @@
-import { useEffect, useState } from "react";
-import Login from "./Login";
+```jsx
+import React, { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
+// Connect directly to the Express backend.
+// This avoids accidentally sending API requests to Vite on port 5173.
+const API = "http://localhost:5000";
 
-function App(){
+const MARKETS = [
+  "R_10",
+  "R_25",
+  "R_50",
+  "R_75",
+  "R_100",
+  "1HZ10V",
+  "1HZ25V",
+  "1HZ50V",
+  "1HZ75V",
+  "1HZ100V",
+];
 
-
-const [loggedIn,setLoggedIn]=useState(
-localStorage.getItem("token") ? true:false
-);
-
-
-const [running,setRunning]=useState(false);
-
-
-const [market,setMarket]=useState("R_100");
-
-
-const [entry,setEntry]=useState(null);
-
-
-const [best,setBest]=useState([]);
-
-
-const [analysis,setAnalysis]=useState(null);
-
-
-
-
-
-const markets={
-
-
-R_10:"Volatility 10 Index",
-
-R_25:"Volatility 25 Index",
-
-R_50:"Volatility 50 Index",
-
-R_75:"Volatility 75 Index",
-
-R_100:"Volatility 100 Index",
-
-
-"1HZ10V":"Volatility 10 (1s)",
-
-"1HZ25V":"Volatility 25 (1s)",
-
-"1HZ50V":"Volatility 50 (1s)",
-
-"1HZ75V":"Volatility 75 (1s)",
-
-"1HZ100V":"Volatility 100 (1s)"
-
-
-};
-
-
-
-
-
-
-
-useEffect(()=>{
-
-
-if(!loggedIn || !running){
-
-return;
-
+function StatCard({ label, value, detail }) {
+  return (
+    <article className="overview-card">
+      <span className="card-label">{label}</span>
+      <strong>{value ?? "—"}</strong>
+      <span className="muted">{detail}</span>
+    </article>
+  );
 }
 
+function StrategyCard({
+  title,
+  percentage,
+  threshold,
+  difference,
+  description,
+  sampleSize,
+}) {
+  const ready =
+    sampleSize >= 30 &&
+    percentage >= threshold &&
+    difference >= 10;
 
+  return (
+    <article className="strategy-card">
+      <div className="strategy-header">
+        <div>
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </div>
 
+        <span className={`signal-badge ${ready ? "ready" : "waiting"}`}>
+          {ready ? "FILTER PASSED" : "WAITING"}
+        </span>
+      </div>
 
+      <div className="percentage">{percentage.toFixed(2)}%</div>
 
-async function loadData(){
+      <div className="progress-track">
+        <div
+          className="progress-fill"
+          style={{
+            width: `${Math.min(100, Math.max(0, percentage))}%`,
+          }}
+        />
+      </div>
 
-
-try{
-
-
-const entryResponse =
-await fetch(
-
-`http://127.0.0.1:5000/entry/${market}`
-
-);
-
-
-
-const entryData =
-await entryResponse.json();
-
-
-setEntry(entryData.scanner);
-
-
-
-
-
-
-const bestResponse =
-await fetch(
-
-"http://127.0.0.1:5000/best-market"
-
-);
-
-
-
-const bestData =
-await bestResponse.json();
-
-
-
-setBest(bestData);
-
-
-
-
-
-
-const analysisResponse =
-await fetch(
-
-`http://127.0.0.1:5000/analysis/${market}`
-
-);
-
-
-
-const analysisData =
-await analysisResponse.json();
-
-
-
-setAnalysis(analysisData);
-
-
-
+      <div className="strategy-details">
+        <span>Threshold: {threshold}%</span>
+        <span>Difference: {difference.toFixed(2)} pp</span>
+      </div>
+    </article>
+  );
 }
 
-catch(error){
+export default function App() {
+  const [market, setMarket] = useState("R_100");
+  const [running, setRunning] = useState(true);
+  const [connection, setConnection] = useState("CONNECTING");
+  const [error, setError] = useState("");
 
-console.log(error);
+  const [digits, setDigits] = useState([]);
+  const [signal, setSignal] = useState({});
+  const [entry, setEntry] = useState({});
+  const [digitStats, setDigitStats] = useState({});
 
+  const [differenceLimit, setDifferenceLimit] = useState(10);
+  const [accountMode, setAccountMode] = useState("DEMO");
+  const [stake, setStake] = useState("1");
+  const [stopLoss, setStopLoss] = useState("5");
+  const [targetProfit, setTargetProfit] = useState("5");
+
+  // Request the backend endpoints independently so a failure in one
+  // does not hide successful responses from the other.
+  useEffect(() => {
+    if (!running) {
+      setConnection("STOPPED");
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function refresh() {
+      let digitsOK = false;
+      let signalOK = false;
+      let nextDigits = null;
+      let nextSignal = null;
+
+      try {
+        const response = await fetch(`${API}/digits`, {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error(`/digits returned HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        nextDigits = Array.isArray(data)
+          ? data
+          : data.digits || data.history || [];
+
+        digitsOK = true;
+      } catch (err) {
+        if (!cancelled) {
+          setError(`Digits request failed: ${err.message}`);
+        }
+      }
+
+      try {
+        const response = await fetch(`${API}/signal`, {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error(`/signal returned HTTP ${response.status}`);
+        }
+
+        nextSignal = await response.json();
+        signalOK = true;
+      } catch (err) {
+        if (!cancelled) {
+          setError(`Signal request failed: ${err.message}`);
+        }
+      }
+
+      if (cancelled) return;
+
+      if (digitsOK) {
+        setDigits(nextDigits);
+      }
+
+      if (signalOK) {
+        setSignal(nextSignal.signal || nextSignal);
+        setEntry(nextSignal.entry || {});
+        setDigitStats(
+          nextSignal.digitStats ||
+            nextSignal.signal?.digitStats ||
+            {}
+        );
+      }
+
+      if (digitsOK && signalOK) {
+        setConnection("CONNECTED");
+        setError("");
+      } else if (digitsOK || signalOK) {
+        setConnection("PARTIAL");
+      } else {
+        setConnection("DISCONNECTED");
+      }
+    }
+
+    refresh();
+
+    const timer = window.setInterval(refresh, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [running, market]);
+
+  async function changeMarket(nextMarket) {
+    setMarket(nextMarket);
+    setError("");
+
+    try {
+      const response = await fetch(
+        `${API}/change-market/${encodeURIComponent(nextMarket)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Market change returned HTTP ${response.status}`);
+      }
+    } catch (err) {
+      setError(
+        `Could not change market: ${err.message}. Check the backend.`
+      );
+    }
+  }
+
+  const strategyData = useMemo(() => {
+    const list = digits
+      .map((item) => {
+        if (typeof item === "number") return item;
+        return Number(item?.digit ?? item);
+      })
+      .filter((number) => Number.isInteger(number) && number >= 0 && number <= 9)
+      .slice(-100);
+
+    const total = list.length;
+    const count = (fn) => list.filter(fn).length;
+    const pct = (number) => (total ? (number / total) * 100 : 0);
+
+    const overCount = count((digit) => digit > 2);
+    const underCount = count((digit) => digit < 7);
+    const evenCount = count((digit) => digit % 2 === 0);
+    const oddCount = count((digit) => digit % 2 !== 0);
+
+    return {
+      total,
+      over: pct(overCount),
+      under: pct(underCount),
+      even: pct(evenCount),
+      odd: pct(oddCount),
+      overDifference: Math.abs(
+        pct(overCount) - pct(count((digit) => digit <= 2))
+      ),
+      underDifference: Math.abs(
+        pct(underCount) - pct(count((digit) => digit >= 7))
+      ),
+      evenDifference: Math.abs(pct(evenCount) - pct(oddCount)),
+      oddDifference: Math.abs(pct(oddCount) - pct(evenCount)),
+    };
+  }, [digits]);
+
+  const lastDigit = digits.length
+    ? String(digits[digits.length - 1]?.digit ?? digits[digits.length - 1])
+    : "—";
+
+  const prediction = signal.prediction || "WAIT";
+  const confidence = Number(signal.confidence ?? signal.strength ?? 0);
+
+  function toggleAutoTrading() {
+    setError(
+      "Auto Trading is display-only. No trades are executed by this dashboard."
+    );
+  }
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <img
+            className="brand-logo"
+            src="/trading-logo.png"
+            alt="Kerry Prime logo"
+            onError={(event) => {
+              event.currentTarget.style.display = "none";
+            }}
+          />
+
+          <div>
+            <h1>KERRY PRIME</h1>
+            <p>TRADING HUB</p>
+            <span className="tagline">TRADE WITH CONFIDENCE</span>
+          </div>
+        </div>
+
+        <div className="connection">
+          <span
+            className={`connection-dot ${
+              connection === "CONNECTED" ? "online" : ""
+            }`}
+          />
+          {connection}
+        </div>
+      </header>
+
+      <main className="main">
+        <section className="welcome">
+          <div>
+            <p className="eyebrow">MARKET INTELLIGENCE TERMINAL</p>
+            <h2>Trade with confidence.</h2>
+            <p className="subtitle">
+              Live digit analysis, market statistics, and signal monitoring.
+            </p>
+          </div>
+
+          <div className="market-selector">
+            <label htmlFor="market">ACTIVE MARKET</label>
+            <select
+              id="market"
+              value={market}
+              onChange={(event) => changeMarket(event.target.value)}
+            >
+              {MARKETS.map((symbol) => (
+                <option key={symbol} value={symbol}>
+                  {symbol}
+                </option>
+              ))}
+            </select>
+          </div>
+        </section>
+
+        {error && (
+          <div className="error-message" role="alert">
+            {error}
+          </div>
+        )}
+
+        <section className="overview-grid">
+          <StatCard
+            label="ACTIVE MARKET"
+            value={market}
+            detail="Selected symbol"
+          />
+
+          <StatCard
+            label="LATEST DIGIT"
+            value={lastDigit}
+            detail="Latest backend result"
+          />
+
+          <StatCard
+            label="ANALYSIS STATUS"
+            value={signal.status || "COLLECTING"}
+            detail={`${strategyData.total}/100 local digits`}
+          />
+
+          <StatCard
+            label="SCANNER SIGNAL"
+            value={prediction}
+            detail={`Reported confidence: ${confidence}%`}
+          />
+        </section>
+
+        <section className="section-block">
+          <div className="section-heading">
+            <div>
+              <h2>Signal Analysis</h2>
+              <p>
+                Historical digit frequencies are descriptive, not guarantees
+                of future outcomes.
+              </p>
+            </div>
+
+            <div className="filter-setting">
+              <label htmlFor="difference">Minimum difference</label>
+              <select
+                id="difference"
+                value={differenceLimit}
+                onChange={(event) =>
+                  setDifferenceLimit(Number(event.target.value))
+                }
+              >
+                <option value={10}>10 percentage points</option>
+                <option value={15}>15 percentage points</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="strategy-grid">
+            <StrategyCard
+              title="OVER 2"
+              percentage={strategyData.over}
+              threshold={60}
+              difference={strategyData.overDifference}
+              description="Digits 3–9"
+              sampleSize={strategyData.total}
+            />
+
+            <StrategyCard
+              title="UNDER 7"
+              percentage={strategyData.under}
+              threshold={60}
+              difference={strategyData.underDifference}
+              description="Digits 0–6"
+              sampleSize={strategyData.total}
+            />
+
+            <StrategyCard
+              title="EVEN"
+              percentage={strategyData.even}
+              threshold={55}
+              difference={strategyData.evenDifference}
+              description="Digits 0, 2, 4, 6, 8"
+              sampleSize={strategyData.total}
+            />
+
+            <StrategyCard
+              title="ODD"
+              percentage={strategyData.odd}
+              threshold={55}
+              difference={strategyData.oddDifference}
+              description="Digits 1, 3, 5, 7, 9"
+              sampleSize={strategyData.total}
+            />
+          </div>
+        </section>
+
+        <section className="section-block">
+          <div className="section-heading">
+            <div>
+              <h2>Scanner Control</h2>
+              <p>Monitor the backend analysis feed.</p>
+            </div>
+          </div>
+
+          <div className="control-row">
+            <button
+              className="primary-button"
+              onClick={() => {
+                setError("");
+                setRunning(true);
+              }}
+            >
+              Start Scanning
+            </button>
+
+            <button
+              className="secondary-button"
+              onClick={() => setRunning(false)}
+            >
+              Stop Scanning
+            </button>
+
+            <span className="status-pill">
+              {running ? "SCANNING" : "STOPPED"}
+            </span>
+          </div>
+
+          <div className="overview-grid compact-grid">
+            <StatCard
+              label="SIGNAL PREDICTION"
+              value={prediction}
+              detail={`Confidence: ${confidence}%`}
+            />
+
+            <StatCard
+              label="ENTRY STATUS"
+              value={entry.status || "WAITING"}
+              detail={`Entry digit: ${entry.entryDigit ?? "—"}`}
+            />
+
+            <StatCard
+              label="ENTRY CONFIRMATIONS"
+              value={entry.confirmations ?? 0}
+              detail="Backend entry scanner"
+            />
+
+            <StatCard
+              label="TICKS ANALYZED"
+              value={signal.ticks ?? strategyData.total}
+              detail="Reported by backend"
+            />
+          </div>
+        </section>
+
+        <section className="section-block">
+          <div className="section-heading">
+            <div>
+              <h2>Recent Digits</h2>
+              <p>Latest results received from your backend.</p>
+            </div>
+          </div>
+
+          <div className="digit-history">
+            {digits.slice(-40).map((item, index, visibleDigits) => {
+              const digit = item?.digit ?? item;
+
+              return (
+                <span
+                  key={`${index}-${digit}`}
+                  className={`history-digit ${
+                    index === visibleDigits.length - 1
+                      ? "latest-history-digit"
+                      : ""
+                  }`}
+                >
+                  {digit}
+                </span>
+              );
+            })}
+
+            {!digits.length && (
+              <span className="empty-state">
+                Waiting for digit data...
+              </span>
+            )}
+          </div>
+
+          {Object.keys(digitStats).length > 0 && (
+            <div className="digit-stat-row">
+              {Array.from({ length: 10 }, (_, digit) => (
+                <div className="digit-stat" key={digit}>
+                  <span>{digit}</span>
+                  <strong>{digitStats[digit] ?? 0}%</strong>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="section-block auto-panel">
+          <div className="section-heading">
+            <div>
+              <h2>Auto Trading Settings</h2>
+              <p>Configuration display only; execution is not connected.</p>
+            </div>
+
+            <span className="signal-badge waiting">NOT CONNECTED</span>
+          </div>
+
+          <div className="settings-grid">
+            <div className="market-selector">
+              <label htmlFor="account">ACCOUNT MODE</label>
+              <select
+                id="account"
+                value={accountMode}
+                onChange={(event) => setAccountMode(event.target.value)}
+              >
+                <option value="DEMO">DEMO</option>
+                <option value="REAL">REAL</option>
+              </select>
+            </div>
+
+            <div className="market-selector">
+              <label htmlFor="stake">STAKE (USD)</label>
+              <input
+                id="stake"
+                type="number"
+                min="0.35"
+                step="0.01"
+                value={stake}
+                onChange={(event) => setStake(event.target.value)}
+              />
+            </div>
+
+            <div className="market-selector">
+              <label htmlFor="stop">STOP LOSS (USD)</label>
+              <input
+                id="stop"
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={stopLoss}
+                onChange={(event) => setStopLoss(event.target.value)}
+              />
+            </div>
+
+            <div className="market-selector">
+              <label htmlFor="target">TARGET PROFIT (USD)</label>
+              <input
+                id="target"
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={targetProfit}
+                onChange={(event) => setTargetProfit(event.target.value)}
+              />
+            </div>
+          </div>
+
+          <button className="auto-button" onClick={toggleAutoTrading}>
+            AUTO TRADING
+          </button>
+
+          <p className="muted">
+            Mode: {accountMode}. Stake: ${stake}. Stop loss: ${stopLoss}.
+            Target profit: ${targetProfit}. No trades are purchased by this
+            frontend.
+          </p>
+        </section>
+
+        <div className="notice">
+          <strong>Risk notice:</strong> Historical digit frequencies do not
+          guarantee future results. Test the market feed and scanner in a demo
+          account before making any real-money trading decisions.
+        </div>
+
+        <footer className="footer">
+          KERRY PRIME TRADING HUB · TRADE WITH CONFIDENCE
+        </footer>
+      </main>
+    </div>
+  );
 }
-
-
-
-}
-
-
-
-
-
-loadData();
-
-
-
-const timer=setInterval(
-
-loadData,
-
-3000
-
-);
-
-
-
-return ()=>clearInterval(timer);
-
-
-
-},[running,market,loggedIn]);
-
-
-
-
-
-
-
-
-
-if(!loggedIn){
-
-
-return (
-
-<Login setLoggedIn={setLoggedIn}/>
-
-);
-
-
-}
-
-
-
-
-
-
-
-
-
-return(
-
-
-<div className="dashboard">
-
-
-
-<h1>
-KERRY PRIME TRADING HUB
-</h1>
-
-
-<h2>
-AI DIGIT ANALYZER
-</h2>
-
-
-
-
-
-
-
-<div className="controlPanel">
-
-
-<h2>
-ANALYZER CONTROL
-</h2>
-
-
-<button
-
-onClick={()=>setRunning(true)}
-
->
-
-START ANALYSIS
-
-</button>
-
-
-
-
-<button
-
-onClick={()=>setRunning(false)}
-
->
-
-STOP ANALYSIS
-
-</button>
-
-
-
-<h3>
-
-STATUS:
-
-{running ? " RUNNING":" STOPPED"}
-
-</h3>
-
-
-</div>
-
-
-
-
-
-
-
-
-<div className="marketPanel">
-
-
-<h2>
-CURRENT MARKET
-</h2>
-
-
-<h1>
-{markets[market]}
-</h1>
-
-
-<p>
-Symbol: {market}
-</p>
-
-
-<select
-
-value={market}
-
-onChange={(e)=>setMarket(e.target.value)}
-
->
-
-
-{
-
-Object.entries(markets).map(([key,value])=>(
-
-
-<option
-
-key={key}
-
-value={key}
-
->
-
-{value}
-
-</option>
-
-
-))
-
-
-}
-
-
-</select>
-
-
-</div>
-
-
-
-
-
-
-
-
-
-<div className="bestPanel">
-
-
-<h2>
-BEST MARKET
-</h2>
-
-
-
-{
-
-best.length > 0 ? (
-
-
-<>
-
-<h3>
-{best[0].market}
-</h3>
-
-
-<p>
-Prediction:
-
-{best[0].prediction}
-
-</p>
-
-
-<p>
-Strength:
-
-{best[0].strength}%
-
-</p>
-
-
-</>
-
-
-)
-
-:
-
-<p>
-Collecting data...
-</p>
-
-
-}
-
-
-</div>
-
-
-
-
-
-
-
-
-
-<div className="signalPanel">
-
-
-<h2>
-SIGNAL
-</h2>
-
-
-
-<h1>
-
-{
-
-entry?.status || "WAITING"
-
-}
-
-</h1>
-
-
-
-
-<p>
-Prediction
-</p>
-
-
-<h2>
-
-{entry?.prediction}
-
-</h2>
-
-
-
-
-
-<p>
-Entry Digit
-</p>
-
-
-<h1>
-
-{entry?.entryDigit ?? "-"}
-
-</h1>
-
-
-
-
-
-<p>
-Confirmation
-</p>
-
-
-<h2>
-
-{entry?.confirmations || 0}/5
-
-</h2>
-
-
-
-</div>
-
-
-
-
-
-
-
-
-
-<div className="patternPanel">
-
-
-<h2>
-ENTRY PATTERN
-</h2>
-
-
-
-{
-
-entry?.patterns?.length ?
-
-
-entry.patterns.map((item,index)=>(
-
-
-<p key={index}>
-
-Pattern {index+1}:
-
-&nbsp;
-
-{item.join(" → ")}
-
-</p>
-
-
-))
-
-
-:
-
-<p>
-Waiting for pattern...
-</p>
-
-
-}
-
-
-
-</div>
-
-
-
-
-
-
-
-
-
-<div className="analysisPanel">
-
-
-<h2>
-LIVE ANALYSIS
-</h2>
-
-
-<p>
-Digits collected:
-
-{analysis?.digits?.length || 0}
-
-</p>
-
-
-
-<p>
-Prediction:
-
-{analysis?.prediction}
-
-</p>
-
-
-
-</div>
-
-
-
-
-
-
-
-
-<button
-
-className="logout"
-
-onClick={()=>{
-
-
-localStorage.removeItem("token");
-
-setLoggedIn(false);
-
-
-}}
-
->
-
-LOGOUT
-
-</button>
-
-
-
-
-</div>
-
-
-);
-
-
-
-}
-
-
-export default App;
+```
